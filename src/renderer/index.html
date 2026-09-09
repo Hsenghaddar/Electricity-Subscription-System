@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ar" dir="rtl"><head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/png" href="./icons/app-logo.png" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:5173 ws://localhost:5173" />
+  <title>مصلحة الاشتراك</title>
+</head><body>
+  <section id="auth-screen" class="auth-screen">
+    <form id="auth-form" class="auth-card">
+      <h1 id="auth-title">تسجيل الدخول</h1>
+      <p id="auth-subtitle">أدخل معلوماتك لفتح البرنامج</p>
+      <label id="display-name-field" class="hidden">اسم المستخدم<input id="display-name" autocomplete="name" /></label>
+      <label>اسم الدخول<input id="login-username" autocomplete="username" required /></label>
+      <label>كلمة السر<input id="login-password" type="password" autocomplete="current-password" required /></label>
+      <div id="auth-error" class="message error"></div>
+      <button class="primary wide" type="submit">فتح البرنامج</button>
+    </form>
+  </section>
+
+  <main id="app" class="app hidden">
+    <header class="titlebar"><button id="app-menu-button" class="app-menu-button" type="button" aria-label="القائمة" aria-expanded="false">☰</button><strong>تقدمة للسيد المحترم الحاج حمزة غدار</strong><span id="current-user"></span><section id="app-menu" class="app-menu hidden"><h3>النسخ الاحتياطي التلقائي</h3><p id="automatic-backup-status">جارٍ التحقق...</p><button id="enable-automatic-backup" type="button">تفعيل النسخ الاحتياطي التلقائي</button><button id="disable-automatic-backup" type="button" class="danger">إلغاء النسخ الاحتياطي التلقائي</button><small>كل يومين الساعة 8:00 صباحاً</small></section></header>
+    <nav class="ribbon">
+      <div class="tabs"><button class="tab active" data-ribbon-tab="files">الملفات</button><button class="tab" data-ribbon-tab="operations">العمليات</button><button class="tab" data-ribbon-tab="reports">التقارير</button></div>
+      <div class="ribbon-actions" data-ribbon-pane="files">
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="users-button" class="ribbon-button"><img class="icon" src="/icons/users.png" alt="" /><b>المستخدمون</b></button><button id="subscribers-button" class="ribbon-button"><img class="icon" src="/icons/subscribers.png" alt="" /><b>المشتركون</b></button></div><span>الأشخاص</span></div>
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="regions-button" class="ribbon-button"><img class="icon" src="/icons/regions.png" alt="" /><b>الأحياء</b></button><button id="boxes-button" class="ribbon-button"><img class="icon" src="/icons/boxes-tab.png" alt="" /><b>العلب</b></button></div><span>الأحياء والعلب</span></div>
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="counters-button" class="ribbon-button"><img class="icon" src="/icons/meters-tab.png" alt="" /><b>العدادات</b></button><button id="breakers-button" class="ribbon-button"><img class="icon" src="/icons/breaker-tab.png" alt="" /><b>الديجنتيرات</b></button><button id="fees-button" class="ribbon-button"><img class="icon" src="/icons/fees.png" alt="" /><b>رسوم الاشتراك</b></button></div><span>العدادات والديجنتيرات</span></div>
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="items-button" class="ribbon-button"><img class="icon" src="/icons/items-tab.png" alt="" /><b>الأصناف</b></button></div><span>الأصناف</span></div>
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="backup-button" class="ribbon-button"><img class="icon" src="/icons/save-icon.png" alt="" /><b>نسخة احتياطية</b></button></div><span>النسخ الاحتياطي</span></div>
+      </div>
+      <div class="ribbon-actions hidden" data-ribbon-pane="operations">
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="consumption-button" class="ribbon-button"><img class="icon" src="/icons/meters-tab.png" alt="" /><b>تسجيل العدادات</b></button><button id="breaker-month-button" class="ribbon-button"><img class="icon" src="/icons/breaker-tab.png" alt="" /><b>تسجيل الديجنتيرات</b></button></div><span>الاستهلاك</span></div>
+        <div class="ribbon-group"><div class="ribbon-group-buttons"><button id="expenses-button" class="ribbon-button"><img class="icon" src="/icons/expenses-tab.png" alt="" /><b>تسجيل المصاريف المستحقة</b></button><button id="payments-button" class="ribbon-button"><img class="icon" src="/icons/fees.png" alt="" /><b>تسديد المستحقات</b></button></div><span>المصاريف والمدفوعات</span></div>
+      </div>
+      <div class="ribbon-actions hidden" data-ribbon-pane="reports"><div class="ribbon-group"><div class="ribbon-group-buttons"><button id="meter-report-button" class="ribbon-button"><img class="icon" src="/icons/meters-tab.png" alt="" /><b>تقرير مشتركي العدادات</b></button><button id="breaker-report-button" class="ribbon-button"><img class="icon" src="/icons/breaker-tab.png" alt="" /><b>تقرير مشتركي الديجنتيرات</b></button></div><span>تقارير المشتركين</span></div><div class="ribbon-group"><div class="ribbon-group-buttons"><button id="institution-debts-button" class="ribbon-button"><img class="icon" src="/icons/fees.png" alt="" /><b>ديون المؤسسة</b></button></div><span>كشف حساب</span></div></div>
+    </nav>
+    <section id="workspace" class="workspace">
+      <p id="workspace-hint">اختر إحدى الوظائف من الشريط العلوي</p>
+      <section id="users-window" class="document-window maximized hidden">
+        <header id="users-window-header" class="document-titlebar">
+          <h2>المستخدمون</h2>
+          <div class="window-controls">
+            <button id="minimize-users" title="تصغير">—</button>
+            <button id="maximize-users" title="تكبير">□</button>
+            <button id="close-users" title="إغلاق">×</button>
+          </div>
+        </header>
+        <div class="toolbar">
+          <button id="new-user"><img class="search-button-icon" src="/icons/new-icon.png" alt="" />جديد</button>
+          <button id="save-users" class="primary"><img class="search-button-icon" src="/icons/save-icon.png" alt="" />حفظ</button>
+          <button id="refresh-users"><img class="search-button-icon" src="/icons/refresh-icon.png" alt="" />تحديث</button>
+          <button id="close-users-2"><img class="search-button-icon" src="/icons/close-icon.png" alt="" />إغلاق</button>
+        </div>
+        <div class="grid-area">
+          <table class="editable-grid">
+            <thead><tr><th class="row-number">#</th><th>اسم المستخدم</th><th>اسم الدخول</th><th>كلمة السر</th><th>فعّال</th></tr></thead>
+            <tbody id="users-body"></tbody>
+            <tfoot><tr id="add-user-row"><td>✱</td><td colspan="4">انقر هنا لإضافة مستخدم جديد</td></tr></tfoot>
+          </table>
+        </div>
+        <footer id="user-message" class="document-status message"></footer>
+      </section>
+    </section>
+    <button id="logout" class="logout">تسجيل الخروج</button>
+  </main>
+
+  <script type="module" src="/main.js"></script>
+</body></html>
