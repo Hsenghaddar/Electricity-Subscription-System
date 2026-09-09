@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+*.log
+.env
+.DS_Store
+Thumbs.db
+.migration/
+*.mdf
+*.ldf
+
+
+seed/*.sqlite
+*.bak
+*.Bak

@@ -1,0 +1,63 @@
+{
+  "name": "bashroun-ishtirak",
+  "version": "0.1.8",
+  "description": "تطبيق مكتبي لإدارة مصلحة الاشتراك",
+  "main": "dist/main/main/main.js",
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"node scripts/build-main.cjs --watch\" \"wait-on tcp:5173 file:dist/main/main/main.js && electron .\"",
+    "start": "npm run dev",
+    "check": "node scripts/check-javascript.cjs",
+    "smoke": "set ELECTRON_RUN_AS_NODE=1&& electron scripts/smoke-test.cjs",
+    "build": "npm run check && vite build && node scripts/build-main.cjs",
+    "dist": "npm run build && electron-builder --win nsis",
+    "postinstall": "electron-builder install-app-deps",
+    "backup:auto": "set ELECTRON_RUN_AS_NODE=1&& electron scripts/automatic-backup.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "9.6.0"
+  },
+  "devDependencies": {
+    "concurrently": "latest",
+    "electron": "^22.3.27",
+    "electron-builder": "latest",
+    "vite": "latest",
+    "wait-on": "latest"
+  },
+  "build": {
+    "appId": "lb.bashroun.ishtirak",
+    "productName": "Bashron Station",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "seed/initial-data.sqlite",
+        "to": "initial-data.sqlite"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "app-icon.png"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
