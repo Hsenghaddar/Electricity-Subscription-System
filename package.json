@@ -1,6 +1,6 @@
 {
   "name": "bashroun-ishtirak",
-  "version": "0.1.8",
+  "version": "0.1.13",
   "description": "تطبيق مكتبي لإدارة مصلحة الاشتراك",
   "main": "dist/main/main/main.js",
   "author": "",
@@ -14,7 +14,9 @@
     "build": "npm run check && vite build && node scripts/build-main.cjs",
     "dist": "npm run build && electron-builder --win nsis",
     "postinstall": "electron-builder install-app-deps",
-    "backup:auto": "set ELECTRON_RUN_AS_NODE=1&& electron scripts/automatic-backup.cjs"
+    "backup:auto": "set ELECTRON_RUN_AS_NODE=1&& electron scripts/automatic-backup.cjs",
+    "benchmark": "set ELECTRON_RUN_AS_NODE=1&& electron scripts/benchmark-database.cjs",
+    "test:cache": "set ELECTRON_RUN_AS_NODE=1&& electron scripts/test-cache.cjs"
   },
   "dependencies": {
     "better-sqlite3": "9.6.0"

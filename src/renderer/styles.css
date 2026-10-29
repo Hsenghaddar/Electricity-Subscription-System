@@ -365,7 +365,7 @@ input:focus {
 }
 
 .document-titlebar h2 {
-  font-size: 15px;
+  font-size: 17px;
   margin: 0;
 }
 
@@ -589,27 +589,7 @@ input:focus {
 }
 
 .consumption-grid th:nth-child(10) {
-  width: 5%;
-}
-
-.consumption-grid th:nth-child(11) {
-  width: 5%;
-}
-
-.consumption-grid th:nth-child(12) {
   width: 7%;
-}
-
-.consumption-grid th:nth-child(13) {
-  width: 7%;
-}
-
-.consumption-grid th:nth-child(14) {
-  width: 8%;
-}
-
-.consumption-grid th:nth-child(15) {
-  width: 6%;
 }
 
 .report-options {
@@ -896,6 +876,61 @@ input:focus {
   text-align: center;
   font-size: 11.7pt;
   line-height: 4.4mm;
+}
+
+.meter-invoice .invoice-top {
+  grid-template-columns: 1.65fr .8fr 1.35fr 1.65fr;
+  gap: 3mm;
+}
+
+.meter-invoice .invoice-top > span {
+  white-space: nowrap;
+}
+
+.meter-invoice .invoice-column {
+  gap: 3mm;
+}
+
+.meter-invoice .invoice-totals > div {
+  white-space: nowrap;
+  font-size: 11.7pt;
+}
+
+.meter-invoice .invoice-totals > div:nth-child(2),
+.meter-invoice .invoice-totals > div:nth-child(2) bdi,
+.meter-invoice .invoice-vat,
+.meter-invoice .invoice-vat bdi {
+  font: inherit;
+}
+
+.meter-invoice .invoice-totals > .invoice-due {
+  font-size: 12.3pt;
+}
+
+.meter-invoice .invoice-date {
+  display: inline-flex;
+  direction: ltr;
+}
+
+.meter-invoice .invoice-whish,
+.meter-invoice .invoice-vat {
+  display: flex;
+  direction: rtl;
+  align-items: baseline;
+  gap: 1mm;
+}
+
+.meter-invoice .invoice-phone-empty {
+  visibility: hidden;
+}
+
+.invoice-meter-number {
+  position: absolute;
+  top: 52.3mm;
+  left: 4mm;
+  font-size: 11.7pt;
+  line-height: 4.5mm;
+  white-space: nowrap;
 }
 
 .breaker-invoice-body {
@@ -1273,14 +1308,16 @@ input:focus {
 
 .document-window .editable-grid tbody td,
 .document-window .editable-grid tbody input {
-  font-size: 15px;
+  font-size: 17px;
+  line-height: 17px;
   font-weight: 400;
 }
 
 .document-window .editable-grid.consumption-grid tbody td,
 .document-window .editable-grid.consumption-grid tbody input,
 .document-window .editable-grid.report-grid tbody td {
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 15px;
   font-weight: 400;
 }
 
@@ -1289,6 +1326,44 @@ input:focus {
 .document-window .editable-grid.report-grid tbody td:nth-child(2),
 .document-window .editable-grid.report-grid tbody td:nth-child(4) {
   font-weight: 700;
+}
+
+/* Keep grid headings and values inside the existing cell dimensions. */
+.document-window .editable-grid th {
+  font-size: 18px;
+  line-height: 18px;
+}
+
+.document-window .editable-grid.consumption-grid th,
+.document-window .editable-grid.report-grid th {
+  font-size: 13px;
+}
+
+.document-window .editable-grid.consumption-grid th {
+  line-height: 13.75px;
+}
+
+.document-window .editable-grid.report-grid th {
+  line-height: 13.2px;
+}
+
+.document-window .editable-grid.finance-grid th {
+  font-size: 17px;
+}
+
+/* Subscriber names retain the increase already applied. */
+.document-window .editable-grid.consumption-grid tbody td:nth-child(2),
+.document-window .editable-grid.consumption-grid tbody td:nth-child(2) input,
+.document-window .editable-grid.report-grid tbody td:nth-child(2) {
+  font-size: 15px;
+  line-height: 18px;
+}
+
+.document-window[data-catalog="subscribers"] .editable-grid tbody input[data-field="name"],
+.document-window .editable-grid tbody input[data-field="subscriberId"],
+.document-window .editable-grid.breaker-month-grid tbody td:nth-child(2) {
+  font-size: 17px;
+  line-height: 20px;
 }
 
 .document-status {

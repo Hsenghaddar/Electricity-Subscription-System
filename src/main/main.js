@@ -19,8 +19,8 @@ const isDevelopment = !electron_1.app.isPackaged;
 const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
 const automaticBackupTaskName = 'Bashroun Ishtirak Automatic Backup';
 let currentUser;
-const consumptionWorkspaceCache = new Map();
-const meterReportCache = new Map();
+const { createMeterCache } = require("./meterCache");
+let meterCache;
 async function runAutomaticBackup() {
     const destination = node_path_1.default.join(node_os_1.default.homedir(), 'Desktop', 'IshtirakBackUp', 'IshtirakBackUp.Bak');
     const temporary = `${destination}.tmp`;
@@ -96,6 +96,7 @@ electron_1.app.whenReady().then(async () => {
         return;
     }
     const db = (0, database_1.openDatabase)();
+    meterCache = createMeterCache(db, consumptions_1);
     electron_1.ipcMain.handle('app:get-info', () => ({
         name: electron_1.app.getName(),
         version: electron_1.app.getVersion(),
@@ -199,8 +200,7 @@ electron_1.app.whenReady().then(async () => {
         try {
             (0, catalogs_1.saveCatalog)(db, name, rows);
             if (['counters', 'subscribers', 'boxes', 'regions', 'amperePlans'].includes(name)) {
-                consumptionWorkspaceCache.clear();
-                meterReportCache.clear();
+                meterCache.invalidate();
             }
             return { ok: true };
         }
@@ -214,8 +214,7 @@ electron_1.app.whenReady().then(async () => {
         try {
             (0, catalogs_1.deleteCatalogRow)(db, name, id);
             if (['counters', 'subscribers', 'boxes', 'regions', 'amperePlans'].includes(name)) {
-                consumptionWorkspaceCache.clear();
-                meterReportCache.clear();
+                meterCache.invalidate();
             }
             return { ok: true };
         }
@@ -225,18 +224,9 @@ electron_1.app.whenReady().then(async () => {
             return { ok: false, message };
         }
     });
-    const cachedConsumption = (id) => { if (!id)
-        return (0, consumptions_1.getConsumptionWorkspace)(db); const cached = consumptionWorkspaceCache.get(id); if (cached)
-        return cached; const loaded = (0, consumptions_1.getConsumptionWorkspace)(db, id); consumptionWorkspaceCache.set(id, loaded); return loaded; };
-    const cachedMeterReport = (id) => { if (!id)
-        return (0, consumptions_1.getMeterReport)(db); const cached = meterReportCache.get(id); if (cached)
-        return cached; const loaded = (0, consumptions_1.getMeterReport)(db, id); meterReportCache.set(id, loaded); return loaded; };
-    const warmRecentMeterReferences = () => { const recent = (0, consumptions_1.getConsumptionWorkspace)(db).periods.slice(0, 2); for (const period of recent) {
-        if (!period.id)
-            continue;
-        cachedConsumption(period.id);
-        cachedMeterReport(period.id);
-    } };
+    const cachedConsumption = id => meterCache.getWorkspace(id);
+    const cachedMeterReport = id => meterCache.getReport(id);
+    const warmRecentMeterReferences = () => meterCache.warmRecent();
     electron_1.ipcMain.handle('consumption:get', (_event, id) => currentUser ? cachedConsumption(id) : { details: [], periods: [], regions: [], candidates: [] });
     electron_1.ipcMain.handle('consumption:warm-recent', () => { if (currentUser)
         setTimeout(warmRecentMeterReferences, 0); });
@@ -245,8 +235,7 @@ electron_1.app.whenReady().then(async () => {
             return { ok: false, message: 'يرجى تسجيل الدخول.' };
         try {
             const id = (0, consumptions_1.saveConsumption)(db, header, details);
-            consumptionWorkspaceCache.delete(id);
-            meterReportCache.clear();
+            meterCache.invalidate();
             return { ok: true, id };
         }
         catch (error) {
@@ -258,8 +247,7 @@ electron_1.app.whenReady().then(async () => {
             return { ok: false, message: 'يرجى تسجيل الدخول.' };
         try {
             (0, consumptions_1.deleteConsumption)(db, id);
-            consumptionWorkspaceCache.delete(id);
-            meterReportCache.clear();
+            meterCache.invalidate();
             return { ok: true };
         }
         catch (error) {

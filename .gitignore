@@ -13,3 +13,5 @@ Thumbs.db
 seed/*.sqlite
 *.bak
 *.Bak
+
+electron-v*-win32-*.zip

@@ -3,7 +3,9 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const outputRoot = path.join(root, 'dist', 'main');
-const sourceDirectories = ['main', 'preload', 'shared'];
+const sourceDirectories = ['main', 'preload'];
+// Remove the former empty shared module from older build output.
+fs.rmSync(path.join(outputRoot, 'shared', 'api.js'), { force: true });
 
 function copyRuntimeSources() {
   for (const directory of sourceDirectories) {

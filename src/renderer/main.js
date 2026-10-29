@@ -8,6 +8,50 @@ let firstRun = false;
 let users = [];
 let newRowNumber = 0;
 let topWindowLayer = 10;
+const searchTextCache = new Map();
+const arabicCollator = new Intl.Collator('ar');
+function normalizedSearch(value) {
+    const text = String(value ?? '');
+    let normalized = searchTextCache.get(text);
+    if (normalized === undefined) {
+        normalized = text.toLocaleLowerCase('ar');
+        if (searchTextCache.size >= 4096)
+            searchTextCache.delete(searchTextCache.keys().next().value);
+        searchTextCache.set(text, normalized);
+    }
+    return normalized;
+}
+function findSearchMatches(items, query, label = item => item.label) {
+    const normalized = normalizedSearch(query);
+    return items.filter(item => normalizedSearch(label(item)).includes(normalized));
+}
+async function selectSearchResult(items, promptText, trimQuery = false) {
+    const entered = await searchDialog(promptText, true);
+    if (typeof entered !== 'string' || !entered.trim())
+        return;
+    const matches = findSearchMatches(items, trimQuery ? entered.trim() : entered);
+    if (!matches.length) {
+        showNoSearchResults();
+        return;
+    }
+    for (const item of matches) {
+        if (await searchDialog(`هل "${item.label}" هو المطلوب؟`, false)) {
+            item.run();
+            return;
+        }
+    }
+}
+function buildOptionLabels(options) {
+    const counts = new Map();
+    for (const option of options) {
+        const label = optionLabel(option);
+        counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return new Map(options.map(option => {
+        const label = optionLabel(option);
+        return [String(option.id), counts.get(label) > 1 ? `${label} (#${option.id})` : label];
+    }));
+}
 function closeContextMenu() { document.querySelector('.context-menu')?.remove(); }
 function showDeleteMenu(event, onDelete) {
     event.preventDefault();
@@ -28,7 +72,7 @@ function searchDialog(message, withInput) {
     return new Promise(resolve => {
         const shade = document.createElement('div');
         shade.className = 'dialog-shade';
-        shade.innerHTML = `<section class="search-dialog" role="dialog" aria-modal="true"><header>بحث <button type="button" data-dialog="cancel">×</button></header><div class="search-dialog-body"><p>${message}</p>${withInput ? '<input data-dialog-input autocomplete="off" />' : ''}<div class="search-dialog-actions"><button type="button" data-dialog="ok">${withInput ? 'OK' : 'نعم'}</button><button type="button" data-dialog="cancel">${withInput ? 'Cancel' : 'لا'}</button></div></div></section>`;
+        shade.innerHTML = `<section class="search-dialog" role="dialog" aria-modal="true"><header>بحث <button type="button" data-dialog="cancel">×</button></header><div class="search-dialog-body"><p>${escapeHtml(message)}</p>${withInput ? '<input data-dialog-input autocomplete="off" />' : ''}<div class="search-dialog-actions"><button type="button" data-dialog="ok">${withInput ? 'OK' : 'نعم'}</button><button type="button" data-dialog="cancel">${withInput ? 'Cancel' : 'لا'}</button></div></div></section>`;
         document.body.append(shade);
         const input = shade.querySelector('[data-dialog-input]');
         const ok = shade.querySelector('[data-dialog="ok"]');
@@ -345,14 +389,26 @@ async function openCatalog(name) {
     $('#workspace-hint').classList.add('hidden');
     enableDocumentMovement(win);
     const body = win.querySelector('tbody'), status = win.querySelector('footer');
-    const optionMaps = {};
-    const catalogOptionLabel = (optionName, option) => {
-        const label = optionLabel(option);
-        if (optionName !== 'subscribers')
-            return label;
-        const duplicateCount = (data.options.subscribers ?? []).filter(item => optionLabel(item) === label).length;
-        return duplicateCount > 1 ? `${label} (#${option.id})` : label;
+    const markDirty = event => {
+        const row = event.target.closest('tr[data-dirty]');
+        if (row)
+            row.dataset.dirty = 'true';
     };
+    body.addEventListener('input', markDirty);
+    body.addEventListener('change', markDirty);
+    body.addEventListener('beforeinput', event => {
+        const input = event.target;
+        if (input.matches('input.numeric-input') && event.inputType === 'insertText' && event.data && Number(input.value) === 0 && input.selectionStart === input.selectionEnd)
+            input.value = '';
+    });
+    const optionMaps = {};
+    const optionRowsById = {};
+    for (const [optionName, optionRows] of Object.entries(data.options))
+        optionRowsById[optionName] = new Map(optionRows.map(option => [String(option.id), option]));
+    const subscriberLabels = buildOptionLabels(data.options.subscribers ?? []);
+    const catalogOptionLabel = (optionName, option) => optionName === 'subscribers'
+        ? subscriberLabels.get(String(option.id))
+        : optionLabel(option);
     for (const [optionName, optionRows] of Object.entries(data.options)) {
         const list = document.createElement('datalist');
         list.id = `options-${name}-${optionName}`;
@@ -366,9 +422,13 @@ async function openCatalog(name) {
         optionMaps[optionName] = map;
         win.append(list);
     }
-    const addRow = (row = {}) => {
+    const rowsById = new Map();
+    const draftRows = [];
+    const sparse = name === 'subscribers';
+    const addRow = (row = {}, target = body) => {
         const tr = document.createElement('tr');
         tr.dataset.id = row.id ? String(row.id) : '';
+        if (row.id) rowsById.set(String(row.id), tr);
         tr.dataset.dirty = row.id ? 'false' : 'true';
         const number = document.createElement('td');
         number.className = 'row-number';
@@ -381,7 +441,7 @@ async function openCatalog(name) {
             if (column.type === 'select') {
                 input.setAttribute('list', `options-${name}-${column.option}`);
                 input.dataset.option = column.option;
-                const selected = (data.options[column.option] ?? []).find(option => String(option.id) === String(row[column.key]));
+                const selected = optionRowsById[column.option]?.get(String(row[column.key]));
                 input.value = selected ? catalogOptionLabel(column.option, selected) : '';
                 input.placeholder = 'اكتب للبحث';
             }
@@ -390,8 +450,6 @@ async function openCatalog(name) {
                 if (column.type === 'number') {
                     input.inputMode = 'decimal';
                     input.classList.add('numeric-input');
-                    input.addEventListener('beforeinput', event => { if (event.inputType === 'insertText' && event.data && Number(input.value) === 0 && input.selectionStart === input.selectionEnd)
-                        input.value = ''; });
                 }
                 if (column.type === 'checkbox')
                     input.checked = row[column.key] == null && !row.id && (name === 'subscribers' || name === 'counters') && column.key === 'active' ? true : Boolean(row[column.key]);
@@ -400,14 +458,21 @@ async function openCatalog(name) {
             }
             td.append(input);
             tr.append(td);
-            input.addEventListener('input', () => { tr.dataset.dirty = 'true'; });
-            input.addEventListener('change', () => { tr.dataset.dirty = 'true'; });
         }
         tr.addEventListener('contextmenu', event => showDeleteMenu(event, () => void (async () => { if (!tr.dataset.id) {
+            const draftIndex = draftRows.indexOf(tr);
+            if (draftIndex >= 0) draftRows.splice(draftIndex, 1);
             tr.remove();
             return;
         } const result = await window.desktopApi.deleteCatalogRow(name, Number(tr.dataset.id)); if (result.ok) {
             tr.remove();
+            rowsById.delete(tr.dataset.id);
+            const deletedIndex = data.rows.findIndex(item => String(item.id) === tr.dataset.id);
+            if (deletedIndex >= 0) {
+                data.rows.splice(deletedIndex, 1);
+                if (!sparse && deletedIndex < rendered) rendered--;
+                if (sparse) rebuildBody();
+            }
             status.className = 'document-status message success';
             status.textContent = 'تم حذف السطر.';
             await messageDialog('تم حذف السطر بنجاح.', 'success');
@@ -417,17 +482,89 @@ async function openCatalog(name) {
             status.textContent = result.message ?? 'تعذّر الحذف.';
             await messageDialog(result.message ?? 'تعذّر الحذف.', 'error');
         } })()));
-        body.append(tr);
-        if (!row.id)
+        target.append(tr);
+        if (!row.id) {
+            draftRows.push(tr);
             tr.querySelector('[data-field]')?.focus();
+        }
     };
     let rendered = 0;
     const grid = win.querySelector('.grid-area');
-    const renderChunk = () => { const batchSize = name === 'counters' ? data.rows.length : 60; const end = Math.min(rendered + batchSize, data.rows.length); for (; rendered < end; rendered++)
-        addRow(data.rows[rendered]); };
+    const rowHeight = 35;
+    const rebuildBody = () => {
+        const active = body.contains(document.activeElement) ? document.activeElement : undefined;
+        const selection = active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : undefined;
+        const fragment = document.createDocumentFragment();
+        let gap = 0;
+        const flushGap = () => {
+            if (!gap) return;
+            const spacer = document.createElement('tr');
+            spacer.className = 'catalog-spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            const cell = document.createElement('td');
+            cell.colSpan = config.columns.length + 1;
+            cell.style.cssText = `height:${gap * rowHeight}px;padding:0;border:0`;
+            spacer.append(cell);
+            fragment.append(spacer);
+            gap = 0;
+        };
+        for (const record of data.rows) {
+            const row = rowsById.get(String(record.id));
+            if (row) {
+                flushGap();
+                fragment.append(row);
+            } else {
+                gap++;
+            }
+        }
+        flushGap();
+        for (const row of draftRows) fragment.append(row);
+        body.replaceChildren(fragment);
+        if (active?.isConnected) {
+            active.focus({ preventScroll: true });
+            if (selection) active.setSelectionRange(...selection);
+        }
+    };
+    const renderRange = (start, end) => {
+        const fragment = document.createDocumentFragment();
+        let changed = false;
+        for (let index = start; index < end; index++) {
+            const record = data.rows[index];
+            if (!rowsById.has(String(record.id))) {
+                addRow(record, fragment);
+                changed = true;
+            }
+        }
+        if (changed) rebuildBody();
+    };
+    const renderChunk = () => {
+        if (sparse) {
+            renderRange(0, Math.min(60, data.rows.length));
+            return;
+        }
+        const fragment = document.createDocumentFragment();
+        const batchSize = name === 'counters' ? data.rows.length : 60;
+        const end = Math.min(rendered + batchSize, data.rows.length);
+        for (; rendered < end; rendered++) addRow(data.rows[rendered], fragment);
+        body.append(fragment);
+    };
     renderChunk();
-    grid.addEventListener('scroll', () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 180 && rendered < data.rows.length)
-        requestAnimationFrame(renderChunk); }, { passive: true });
+    let scrollQueued = false;
+    grid.addEventListener('scroll', () => {
+        if (scrollQueued) return;
+        scrollQueued = true;
+        requestAnimationFrame(() => {
+            scrollQueued = false;
+            if (!win.isConnected) return;
+            if (sparse) {
+                const first = Math.floor(grid.scrollTop / rowHeight);
+                const count = Math.ceil(grid.clientHeight / rowHeight);
+                renderRange(Math.max(0, first - 12), Math.min(data.rows.length, first + count + 24));
+            } else if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 180 && rendered < data.rows.length) {
+                renderChunk();
+            }
+        });
+    }, { passive: true });
     const findSequentially = async (kind) => {
         const label = kind === 'counter' ? 'رقم العداد' : 'اسم المشترك';
         const entered = await searchDialog(`أدخل ${label} أو جزءاً منه`, true);
@@ -439,10 +576,9 @@ async function openCatalog(name) {
             status.className = 'document-status message error';
             return;
         }
-        const subscriberOptions = data.options.subscribers ?? [];
-        const subscriberName = (id) => String(subscriberOptions.find(item => String(item.id) === String(id))?.name ?? '');
+        const subscriberName = (id) => String(optionRowsById.subscribers?.get(String(id))?.name ?? '');
         const rowSubscriberName = (row) => name === 'subscribers' ? String(row.name ?? '') : subscriberName(row.subscriberId);
-        const matches = data.rows.filter(row => String(kind === 'counter' ? row.counterNumber : rowSubscriberName(row)).toLocaleLowerCase('ar').includes(query));
+        const matches = findSearchMatches(data.rows, query, row => kind === 'counter' ? row.counterNumber : rowSubscriberName(row));
         if (!matches.length) {
             showNoSearchResults();
             return;
@@ -450,9 +586,20 @@ async function openCatalog(name) {
         for (const match of matches) {
             const label = kind === 'counter' ? String(match.counterNumber) : rowSubscriberName(match);
             if (await searchDialog(`هل "${label}" هو المطلوب؟`, false)) {
-                while (rendered < data.rows.length && !body.querySelector(`tr[data-id="${match.id}"]`))
+                if (sparse && !rowsById.has(String(match.id))) {
+                    const index = data.rows.indexOf(match);
+                    renderRange(Math.max(0, index - 15), Math.min(data.rows.length, index + 45));
+                }
+                let lastYield = performance.now();
+                while (!sparse && rendered < data.rows.length && !rowsById.has(String(match.id))) {
                     renderChunk();
-                const tr = body.querySelector(`tr[data-id="${match.id}"]`);
+                    if (performance.now() - lastYield > 16) {
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                        if (!win.isConnected) return;
+                        lastYield = performance.now();
+                    }
+                }
+                const tr = rowsById.get(String(match.id));
                 if (tr) {
                     pinSearchResult(body, tr);
                     tr.querySelector('input')?.focus();
@@ -552,7 +699,7 @@ async function openConsumption(periodId, replace = false) {
     win.innerHTML = `<header class="document-titlebar"><h2>تسجيل العدادات</h2><div class="window-controls"><button data-cmd="min">—</button><button data-cmd="max">□</button><button data-cmd="close">×</button></div></header>
   <div class="toolbar"><button data-cmd="new"><img class="search-button-icon" src="/icons/new-icon.png" alt="" />جديد</button><button data-cmd="save" class="primary"><img class="search-button-icon" src="/icons/save-icon.png" alt="" />حفظ</button><button data-cmd="find-ref"><img class="search-button-icon" src="/icons/search-reference.png" alt="" />بحث</button><button data-cmd="find-name"><img class="search-button-icon" src="/icons/search-person.png" alt="" />بحث عن اسم مشترك</button><button data-cmd="delete"><img class="search-button-icon" src="/icons/delete-icon.png" alt="" />مسح</button><button data-cmd="report"><img class="search-button-icon" src="/icons/report-icon.png" alt="" />تقرير</button><button data-cmd="refresh"><img class="search-button-icon" src="/icons/refresh-icon.png" alt="" />تحديث</button><button data-cmd="close"><img class="search-button-icon" src="/icons/close-icon.png" alt="" />إغلاق</button></div>
   <div class="consumption-header"><label>مرجع تسجيل العدادات <input name="reference" /></label><label>التاريخ <input name="date" type="date" /></label><label>قيمة الدولار <input name="dollar" type="number" /></label><label>السعر ل.ل. <input name="price-lbp" type="number" /></label><label>السعر بالدولار <input name="price-usd" type="text" inputmode="decimal" /></label><button data-cmd="apply-price">تطبيق السعر ↓</button><label>الحي <select name="region"><option value="">اختر الحي</option>${data.regions.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></label><button data-cmd="load-region">تحميل مشتركي الحي ↓</button><button data-cmd="load-all">تحميل تمام المشتركين ↓</button></div>
-  <div class="grid-area"><table class="editable-grid consumption-grid"><thead><tr><th>#</th><th>اسم المشترك</th><th>اسم العلبة</th><th>تسجيل قيمة العداد</th><th>قيمة العداد السابقة</th><th>سعر الكيلو</th><th>سعر الكيلو بالدولار</th><th>رسم الاشتراك</th><th>رسم الاشتراك بالدولار</th><th>مدفوع</th><th>المبلغ المدفوع</th><th>المبلغ المدفوع بالدولار</th><th>رقم العداد</th></tr></thead><tbody></tbody><tfoot><tr data-cmd="add-meter-row"><td>✱</td><td colspan="12">انقر هنا لإضافة سطر جديد</td></tr></tfoot></table></div><footer class="document-status message"></footer>`;
+  <div class="grid-area"><table class="editable-grid consumption-grid"><thead><tr><th>#</th><th>اسم المشترك</th><th>اسم العلبة</th><th>تسجيل قيمة العداد</th><th>قيمة العداد السابقة</th><th>سعر الكيلو</th><th>سعر الكيلو بالدولار</th><th>رسم الاشتراك</th><th>رسم الاشتراك بالدولار</th><th>رقم العداد</th></tr></thead><tbody></tbody><tfoot><tr data-cmd="add-meter-row"><td>✱</td><td colspan="9">انقر هنا لإضافة سطر جديد</td></tr></tfoot></table></div><footer class="document-status message"></footer>`;
     $('#workspace').append(win);
     win.style.zIndex = String(++topWindowLayer);
     $('#workspace-hint').classList.add('hidden');
@@ -562,14 +709,14 @@ async function openConsumption(periodId, replace = false) {
     const status = win.querySelector('footer');
     const message = (text, type = '') => { status.textContent = text; status.className = `document-status message ${type}`; };
     const setHeader = (header) => { getInput('reference').value = header?.reference ?? ''; getInput('date').value = header?.consumptionDate?.slice(0, 10) ?? todayIso(); getInput('dollar').value = String(header?.dollarRate ?? 0); };
-    const numericFields = ['counterValue', 'kiloPriceLbp', 'kiloPriceUsd', 'subscriptionFeeLbp', 'subscriptionFeeUsd', 'discountLbp', 'discountUsd', 'paidValueLbp', 'paidValueUsd'];
+    const pricingFields = ['kiloPriceLbp', 'kiloPriceUsd', 'subscriptionFeeLbp', 'subscriptionFeeUsd'];
     const render = () => {
         body.replaceChildren();
         const fragment = document.createDocumentFragment();
         details.forEach((d, index) => {
             const tr = document.createElement('tr');
             tr.dataset.index = String(index);
-            tr.innerHTML = `<td class="row-number">${index + 1}</td><td>${d.subscriberName}</td><td>${d.boxName}</td><td><input type="number" step="any" dir="ltr" data-detail="counterValue" value="${d.counterValue}" /></td><td><input type="number" dir="ltr" value="${d.previousCounterValue ?? 0}" readonly tabindex="-1" /></td>${numericFields.slice(1, 5).map(key => `<td><input type="number" step="any" dir="ltr" data-detail="${key}" value="${d[key]}" /></td>`).join('')}<td><input type="checkbox" data-detail="paid" ${d.paid ? 'checked' : ''} /></td>${['paidValueLbp', 'paidValueUsd'].map(key => `<td><input type="number" step="any" dir="ltr" data-detail="${key}" value="${d[key]}" /></td>`).join('')}<td>${d.counterNumber}</td>`;
+            tr.innerHTML = `<td class="row-number">${index + 1}</td><td>${d.subscriberName}</td><td>${d.boxName}</td><td><input type="number" step="any" dir="ltr" data-detail="counterValue" value="${d.counterValue}" /></td><td><input type="number" dir="ltr" value="${d.previousCounterValue ?? 0}" readonly tabindex="-1" /></td>${pricingFields.map(key => `<td><input type="number" step="any" dir="ltr" data-detail="${key}" value="${d[key]}" /></td>`).join('')}<td>${d.counterNumber}</td>`;
             tr.querySelector('[data-detail="counterValue"]').addEventListener('keydown', event => {
                 if (event.key !== 'Enter')
                     return;
@@ -606,21 +753,13 @@ async function openConsumption(periodId, replace = false) {
         const label = `${candidate.subscriberName} - ${candidate.counterNumber}`;
         choices.set(label, candidate);
         list.append(new Option(label));
-    } win.append(list); const tr = document.createElement('tr'); draftRow = tr; tr.className = 'meter-draft-row'; tr.innerHTML = `<td class="row-number">ج</td><td><input list="${list.id}" placeholder="اكتب اسم المشترك" autocomplete="off" /></td><td data-draft-box></td><td colspan="12">اكتب الاسم ثم اختر المشترك من النتائج</td>`; body.append(tr); const input = tr.querySelector('input'), box = tr.querySelector('[data-draft-box]'); const choose = (candidate) => { details.push({ ...candidate }); draftRow = undefined; list.remove(); render(); const row = body.querySelector(`tr[data-index="${details.length - 1}"]`); row?.scrollIntoView({ block: 'center' }); row?.querySelector('[data-detail="counterValue"]')?.focus(); message('تمت إضافة المشترك. أدخل قيمة العداد ثم اضغط حفظ.', 'success'); }; input.addEventListener('input', () => { const candidate = choices.get(input.value); box.textContent = candidate?.boxName ?? ''; if (candidate)
+    } win.append(list); const tr = document.createElement('tr'); draftRow = tr; tr.className = 'meter-draft-row'; tr.innerHTML = `<td class="row-number">ج</td><td><input list="${list.id}" placeholder="اكتب اسم المشترك" autocomplete="off" /></td><td data-draft-box></td><td colspan="7">اكتب الاسم ثم اختر المشترك من النتائج</td>`; body.append(tr); const input = tr.querySelector('input'), box = tr.querySelector('[data-draft-box]'); const choose = (candidate) => { details.push({ ...candidate }); draftRow = undefined; list.remove(); render(); const row = body.querySelector(`tr[data-index="${details.length - 1}"]`); row?.scrollIntoView({ block: 'center' }); row?.querySelector('[data-detail="counterValue"]')?.focus(); message('تمت إضافة المشترك. أدخل قيمة العداد ثم اضغط حفظ.', 'success'); }; input.addEventListener('input', () => { const candidate = choices.get(input.value); box.textContent = candidate?.boxName ?? ''; if (candidate)
         choose(candidate); }); input.addEventListener('keydown', event => { if (event.key !== 'Enter')
-        return; const query = input.value.trim().toLocaleLowerCase('ar'); const matches = available.filter(candidate => candidate.subscriberName.toLocaleLowerCase('ar').includes(query) || candidate.counterNumber.toLocaleLowerCase('ar').includes(query)); if (matches.length === 1) {
+        return; const query = input.value.trim().toLocaleLowerCase('ar'); const matches = available.filter(candidate => normalizedSearch(candidate.subscriberName).includes(query) || normalizedSearch(candidate.counterNumber).includes(query)); if (matches.length === 1) {
         event.preventDefault();
         choose(matches[0]);
     } }); input.focus(); };
-    const findRows = async (rows, promptText) => { const entered = await searchDialog(promptText, true); if (typeof entered !== 'string' || !entered.trim())
-        return; const q = entered.trim().toLocaleLowerCase('ar'); const matches = rows.filter(x => x.label.toLocaleLowerCase('ar').includes(q)); if (!matches.length) {
-        showNoSearchResults();
-        return;
-    } for (const match of matches)
-        if (await searchDialog(`هل "${match.label}" هو المطلوب؟`, false)) {
-            match.run();
-            return;
-        } };
+    const findRows = (items, promptText) => selectSearchResult(items, promptText, true);
     setHeader(data.header);
     render();
     let closeAfterSave = false;
@@ -705,15 +844,7 @@ async function openBreakerMonth(periodId, replace = false) {
         details.push({ ...candidate });
         ids.add(candidate.subscriberId);
     } }); render(); message(`تم تحميل ${candidates.length} مشتركاً.`, 'success'); };
-    const find = async (items, prompt) => { const entered = await searchDialog(prompt, true); if (typeof entered !== 'string' || !entered.trim())
-        return; const query = entered.toLocaleLowerCase('ar'); const matches = items.filter(item => item.label.toLocaleLowerCase('ar').includes(query)); if (!matches.length) {
-        showNoSearchResults();
-        return;
-    } for (const item of matches)
-        if (await searchDialog(`هل "${item.label}" هو المطلوب؟`, false)) {
-            item.run();
-            return;
-        } };
+    const find = (items, promptText) => selectSearchResult(items, promptText);
     input('bm-reference').value = data.header?.reference ?? '';
     input('bm-date').value = data.header?.monthDate?.slice(0, 10) ?? todayIso();
     input('bm-notes').value = data.header?.notes ?? '';
@@ -784,6 +915,9 @@ async function openFinance(kind, id, replace = false) {
     const body = win.querySelector('tbody');
     const status = win.querySelector('footer');
     const message = (text, type = '') => { status.textContent = text; status.className = `document-status message ${type}`; };
+    const optionRowsById = Object.fromEntries(Object.entries(data.options).map(([name, options]) => [name, new Map(options.map(option => [String(option.id), option]))]));
+    const columnsByKey = new Map(config.columns.map(column => [column.key, column]));
+    const subscriberLabels = buildOptionLabels(data.options.subscribers ?? []);
     const optionMaps = {};
     for (const [name, options] of Object.entries(data.options)) {
         const list = document.createElement('datalist');
@@ -791,8 +925,8 @@ async function openFinance(kind, id, replace = false) {
         const map = new Map();
         for (const option of options) {
             let label = String(option.name ?? option.id);
-            if (name === 'subscribers' && option.subscriberNumber)
-                label = `${option.subscriberNumber} - ${option.name}`;
+            if (name === 'subscribers')
+                label = subscriberLabels.get(String(option.id));
             if (name === 'dues')
                 label = `${option.reference} - ${option.name} - ${option.remaining}`;
             map.set(label, String(option.id));
@@ -810,8 +944,8 @@ async function openFinance(kind, id, replace = false) {
         rows = [];
         render();
     } message(`تم تحميل أصناف المرجع: ${reference}`, 'success'); };
-    const optionLabel = (optionName, value, row) => { const option = data.options[optionName]?.find(x => String(x.id) === String(value)); if (optionName === 'subscribers')
-        return option ? `${option.subscriberNumber ?? ''} - ${option.name}` : String(row.subscriberName ?? ''); if (optionName === 'dues')
+    const financeOptionLabel = (optionName, value, row) => { const option = optionRowsById[optionName]?.get(String(value)); if (optionName === 'subscribers')
+        return option ? subscriberLabels.get(String(option.id)) : String(row.subscriberName ?? ''); if (optionName === 'dues')
         return option ? `${option.name} - المتبقي ${option.remaining}` : String(row.itemName ?? ''); return String(option?.name ?? row.itemName ?? ''); };
     const render = () => { body.replaceChildren(); rows.forEach((row, index) => { const tr = document.createElement('tr'); tr.dataset.index = String(index); tr.innerHTML = `<td class="row-number">${index + 1}</td>`; for (const col of config.columns) {
         const td = document.createElement('td');
@@ -821,14 +955,14 @@ async function openFinance(kind, id, replace = false) {
         if (col.type === 'select') {
             input.setAttribute('list', `finance-${kind}-${col.option}`);
             input.dataset.option = col.option;
-            input.value = optionLabel(col.option, row[col.key], row);
+            input.value = financeOptionLabel(col.option, row[col.key], row);
         }
         else
             input.value = String(row[col.key] ?? '');
         td.append(input);
         tr.append(td);
     } tr.addEventListener('contextmenu', event => showDeleteMenu(event, () => { rows.splice(index, 1); render(); })); body.append(tr); }); };
-    const sync = () => { body.querySelectorAll('tr').forEach(tr => { const row = rows[Number(tr.dataset.index)]; tr.querySelectorAll('[data-field]').forEach(input => { const col = config.columns.find(c => c.key === input.dataset.field); row[col.key] = input.dataset.option ? Number(optionMaps[input.dataset.option]?.get(input.value)) || 0 : col.type === 'number' ? Number(input.value) || 0 : input.value; }); }); };
+    const sync = () => { body.querySelectorAll('tr').forEach(tr => { const row = rows[Number(tr.dataset.index)]; tr.querySelectorAll('[data-field]').forEach(input => { const col = columnsByKey.get(input.dataset.field); row[col.key] = input.dataset.option ? Number(optionMaps[input.dataset.option]?.get(input.value)) || 0 : col.type === 'number' ? Number(input.value) || 0 : input.value; }); }); };
     const add = () => { if (kind === 'payments' && !win.querySelector('[name="due-reference"]').value) {
         message('ابحث عن مرجع المستحقات أولاً.', 'error');
         return;
@@ -863,17 +997,9 @@ async function openFinance(kind, id, replace = false) {
         message(result.message ?? 'تعذّر الحفظ.', 'error');
         await messageDialog(result.message ?? 'تعذّر الحفظ.', 'error');
     } })());
-    const sequential = async (items, promptText) => { const entered = await searchDialog(promptText, true); if (typeof entered !== 'string' || !entered.trim())
-        return; const q = entered.toLocaleLowerCase('ar'); const matches = items.filter(x => x.label.toLocaleLowerCase('ar').includes(q)); if (!matches.length) {
-        showNoSearchResults();
-        return;
-    } for (const item of matches)
-        if (await searchDialog(`هل "${item.label}" هو المطلوب؟`, false)) {
-            item.run();
-            return;
-        } };
+    const sequential = (items, promptText) => selectSearchResult(items, promptText);
     win.querySelector('[data-fin="search"]').addEventListener('click', () => void (kind === 'payments' ? sequential([...new Set(data.options.dues.map(option => String(option.reference)))].map(reference => ({ label: reference, run: () => setDueReference(reference) })), 'أدخل مرجع المستحقات أو جزءاً منه') : sequential(data.references.map(ref => ({ label: ref.reference, run: () => void openFinance(kind, ref.id, true) })), 'أدخل المرجع أو جزءاً منه')));
-    win.querySelector('[data-fin="search-name"]')?.addEventListener('click', () => { sync(); void sequential(rows.map((row, index) => ({ label: optionLabel('subscribers', row.subscriberId, row), run: () => pinSearchResult(body, body.querySelector(`tr[data-index="${index}"]`)) })), 'أدخل اسم المشترك أو جزءاً منه'); });
+    win.querySelector('[data-fin="search-name"]')?.addEventListener('click', () => { sync(); void sequential(rows.map((row, index) => ({ label: financeOptionLabel('subscribers', row.subscriberId, row), run: () => pinSearchResult(body, body.querySelector(`tr[data-index="${index}"]`)) })), 'أدخل اسم المشترك أو جزءاً منه'); });
     win.querySelector('[data-fin="delete"]').addEventListener('click', () => void (async () => { if (!currentId) {
         message('لا يوجد مرجع محفوظ لمسحه.', 'error');
         return;
@@ -992,16 +1118,12 @@ function showInvoicePreview(header, rows, usd) {
     const win = document.createElement('section');
     win.className = 'document-window maximized print-preview';
     const invoices = rows.map(row => {
-        const usage = Math.max(0, Number(row.counterValue) - Number(row.previousCounterValue));
-        const rate = usd ? Number(row.kiloPriceUsd) : Number(row.kiloPriceLbp);
-        const fee = usd ? Number(row.subscriptionFeeUsd) : Number(row.subscriptionFeeLbp);
-        const discount = usd ? Number(row.discountUsd) : Number(row.discountLbp);
-        const paid = usd ? Number(row.paidValueUsd) : Number(row.paidValueLbp);
-        const due = Math.max(0, usage * rate + fee - discount - paid);
+        const { usage, monthlyValue, vat, total } = meterReportAmounts(row, usd);
+        const rate = Number(usd ? row.kiloPriceUsd : row.kiloPriceLbp);
+        const fee = Number(usd ? row.subscriptionFeeUsd : row.subscriptionFeeLbp);
         const date = new Date(`${header.consumptionDate}T00:00:00`);
-        const money = (n) => `${usd ? '$' : ''}${usd ? n.toFixed(2) : Math.round(n).toLocaleString('en-US')}`;
-        const dueMoney = usd ? `$${Math.round(due)}` : Math.round(due).toLocaleString('en-US');
-        return `<article class="invoice"><div class="invoice-inner"><div class="invoice-top"><span>محطة بشرون الكهربائية</span><span>1</span><span>بشرون 1</span><span>رقم الصيانة: 71/118620</span></div><div class="invoice-body"><div class="invoice-column"><div>اسم المشترك: ${escapeHtml(row.subscriberName)}</div><div>رقم العداد الحالي: ${row.counterValue}</div><div>رقم العداد السابق: ${row.previousCounterValue}</div><div>استهلاك الشهر: ${usage}</div></div><div class="invoice-column">${row.phone?.trim() ? `<div>تلفون: ${escapeHtml(row.phone.trim())}</div>` : ''}<div>قيمة العداد: ${money(rate)}</div><div>رسم الاشتراك: ${money(fee)}</div><div>قيمة العداد بالأمبير: ${escapeHtml(row.amperes)}</div></div><div class="invoice-column"><div>سنة: ${date.getFullYear()}</div><div>عن شهر: ${arabicMonths[date.getMonth()]}</div><div class="invoice-due">مستحق الدفع: ${dueMoney}</div></div></div><p class="invoice-note">الرجاء تسديد الفاتورة قبل السابع من الشهر</p></div></article>`;
+        const money = amount => usd ? '$' + amount.toFixed(2) : Math.round(amount).toLocaleString('en-US');
+        return `<article class="invoice meter-invoice"><div class="invoice-inner"><div class="invoice-top"><span>محطة بشرون الكهربائية</span><span class="invoice-region">${escapeHtml(row.regionName ?? '')}</span><span class="invoice-whish" dir="ltr"><span>Whish:</span><bdi dir="ltr">70/400467</bdi></span><span>رقم الصيانة: <bdi dir="ltr">71/118620</bdi></span></div><div class="invoice-body"><div class="invoice-column"><div>اسم المشترك: ${escapeHtml(row.subscriberName)}</div><div>رقم العداد الحالي: ${row.counterValue}</div><div>رقم العداد السابق: ${row.previousCounterValue}</div><div>استهلاك الشهر: ${usage}</div></div><div class="invoice-column"><div class="invoice-phone${row.phone?.trim() ? '' : ' invoice-phone-empty'}">تلفون: <bdi dir="ltr">${escapeHtml(row.phone?.trim() ?? '')}</bdi></div><div>قيمة العداد: <bdi dir="ltr">${money(rate)}</bdi></div><div>رسم الاشتراك: <bdi dir="ltr">${money(fee)}</bdi></div><div>قيمة العداد بالأمبير: ${escapeHtml(row.amperes)}</div></div><div class="invoice-column invoice-totals"><div>التاريخ: <bdi class="invoice-date" dir="ltr"><span dir="rtl">${escapeHtml(arabicMonths[date.getMonth()])}</span><span>/${date.getFullYear()}</span></bdi></div><div>القيمة الشهرية: <bdi dir="ltr">${money(monthlyValue)}</bdi></div><div class="invoice-vat" dir="ltr"><bdi dir="rtl">VAT 11%:</bdi><bdi dir="ltr">${money(vat)}</bdi></div><div class="invoice-due">المجموع: <bdi dir="ltr">${usd ? '$' + Math.round(total) : money(total)}</bdi></div></div></div><div class="invoice-meter-number">رقم العداد: <bdi dir="ltr">${escapeHtml(row.counterNumber)}</bdi></div><p class="invoice-note">الرجاء تسديد الفاتورة قبل السابع من الشهر</p></div></article>`;
     });
     const pageCount = Math.ceil(invoices.length / 4);
     const pages = Array.from({ length: pageCount }, (_, index) => `<section class="invoice-page ${index === 0 ? 'active' : ''}" data-invoice-page="${index}">${invoices.slice(index * 4, index * 4 + 4).join('')}</section>`).join('');
@@ -1015,6 +1137,21 @@ function showInvoicePreview(header, rows, usd) {
     win.querySelector('[data-preview="previous"]').addEventListener('click', () => showPage(currentPage - 1));
     win.querySelector('[data-preview="next"]').addEventListener('click', () => showPage(currentPage + 1));
     showPage(0);
+}
+function meterReportAmounts(row, usd) {
+    const usage = Math.max(0, Number(row.counterValue) - Number(row.previousCounterValue));
+    const rate = Number(usd ? row.kiloPriceUsd : row.kiloPriceLbp);
+    const fee = Number(usd ? row.subscriptionFeeUsd : row.subscriptionFeeLbp);
+    // Calculate in cents (USD) or whole pounds (LBP) so displayed amounts add up.
+    const scale = usd ? 100 : 1;
+    const monthlyUnits = Math.round((usage * rate + fee + Number.EPSILON) * scale);
+    const vatUnits = Math.round(monthlyUnits * 11 / 100);
+    return {
+        usage,
+        monthlyValue: monthlyUnits / scale,
+        vat: vatUnits / scale,
+        total: (monthlyUnits + vatUnits) / scale,
+    };
 }
 async function openMeterReport(periodId, replace = false) {
     const existing = document.querySelector('[data-report="meters"]');
@@ -1040,30 +1177,47 @@ async function openMeterReport(periodId, replace = false) {
     let state = 'all';
     let regionFilter = '';
     let boxFilter = '';
-    const regionOptions = [...new Set(data.rows.map(row => row.regionName))].sort((a, b) => a.localeCompare(b, 'ar'));
-    const boxOptions = [...new Set(data.rows.map(row => row.boxName))].sort((a, b) => a.localeCompare(b, 'ar'));
+    const regionOptions = [...new Set(data.rows.map(row => row.regionName))].sort((a, b) => arabicCollator.compare(a, b));
+    const boxOptions = [...new Set(data.rows.map(row => row.boxName))].sort((a, b) => arabicCollator.compare(a, b));
     const win = document.createElement('section');
     win.className = 'document-window maximized meter-report-window';
     win.dataset.report = 'meters';
-    win.innerHTML = `<header class="document-titlebar"><h2>تقرير مشتركي العدادات</h2><div class="window-controls"><button data-report-cmd="min">—</button><button data-report-cmd="max">□</button><button data-report-cmd="close">×</button></div></header><div class="toolbar"><button data-report-cmd="find-ref"><img class="search-button-icon" src="/icons/search-reference.png" alt="" />بحث</button><button data-report-cmd="find-name"><img class="search-button-icon" src="/icons/search-person.png" alt="" />بحث عن اسم مشترك</button><button data-report-cmd="find-meter"><img class="search-button-icon" src="/icons/meters-tab.png" alt="" />بحث عن رقم عداد</button><button data-report-cmd="preview" class="primary"><img class="search-button-icon" src="/icons/report-icon.png" alt="" />تقرير</button><button data-report-cmd="refresh"><img class="search-button-icon" src="/icons/refresh-icon.png" alt="" />تحديث</button><button data-report-cmd="close"><img class="search-button-icon" src="/icons/close-icon.png" alt="" />إغلاق</button></div><div class="report-options"><label>المرجع <input name="report-reference" value="${escapeHtml(data.header?.reference ?? '')}" readonly /></label><label>قيمة الدولار <input value="${data.header?.dollarRate ?? 0}" readonly /></label><label>$ <input name="usd" type="checkbox" checked /></label><label>الحي <select name="region-filter"><option value="">كل الأحياء</option>${regionOptions.map(region => `<option value="${escapeHtml(region)}">${escapeHtml(region)}</option>`).join('')}</select></label><label>العلبة <select name="box-filter"><option value="">كل العلب</option>${boxOptions.map(box => `<option value="${escapeHtml(box)}">${escapeHtml(box)}</option>`).join('')}</select></label><label>الترتيب <select name="sort"><option value="location" selected>حسب الحي والعلب</option><option value="subscriber">حسب المشتركين</option></select></label><label>الحالة <select name="state"><option value="all">الكل</option><option value="unpaid">غير مدفوع</option><option value="paid">مدفوع</option></select></label></div><div class="grid-area"><table class="editable-grid report-grid"><thead><tr><th>#</th><th>اسم المشترك</th><th>رقم العداد</th><th>اسم العلبة</th><th>قيمة العداد الجديدة</th><th>قيمة العداد القديمة</th><th>المصروف</th><th>رسم الاشتراك</th><th>سعر الكيلو</th><th>المجموع</th><th>مدفوع</th><th><label>تحديد الكل <input type="checkbox" data-select-all /></label></th></tr></thead><tbody></tbody></table></div><footer class="document-status message"></footer>`;
+    win.innerHTML = `<header class="document-titlebar"><h2>تقرير مشتركي العدادات</h2><div class="window-controls"><button data-report-cmd="min">—</button><button data-report-cmd="max">□</button><button data-report-cmd="close">×</button></div></header><div class="toolbar"><button data-report-cmd="find-ref"><img class="search-button-icon" src="/icons/search-reference.png" alt="" />بحث</button><button data-report-cmd="find-name"><img class="search-button-icon" src="/icons/search-person.png" alt="" />بحث عن اسم مشترك</button><button data-report-cmd="find-meter"><img class="search-button-icon" src="/icons/meters-tab.png" alt="" />بحث عن رقم عداد</button><button data-report-cmd="preview" class="primary"><img class="search-button-icon" src="/icons/report-icon.png" alt="" />تقرير</button><button data-report-cmd="refresh"><img class="search-button-icon" src="/icons/refresh-icon.png" alt="" />تحديث</button><button data-report-cmd="close"><img class="search-button-icon" src="/icons/close-icon.png" alt="" />إغلاق</button></div><div class="report-options"><label>المرجع <input name="report-reference" value="${escapeHtml(data.header?.reference ?? '')}" readonly /></label><label>قيمة الدولار <input value="${data.header?.dollarRate ?? 0}" readonly /></label><label>$ <input name="usd" type="checkbox" checked /></label><label>الحي <select name="region-filter"><option value="">كل الأحياء</option>${regionOptions.map(region => `<option value="${escapeHtml(region)}">${escapeHtml(region)}</option>`).join('')}</select></label><label>العلبة <select name="box-filter"><option value="">كل العلب</option>${boxOptions.map(box => `<option value="${escapeHtml(box)}">${escapeHtml(box)}</option>`).join('')}</select></label><label>الترتيب <select name="sort"><option value="location" selected>حسب الحي والعلب</option><option value="subscriber">حسب المشتركين</option></select></label><label>الحالة <select name="state"><option value="all">الكل</option><option value="unpaid">غير مدفوع</option><option value="paid">مدفوع</option></select></label></div><div class="grid-area"><table class="editable-grid report-grid"><thead><tr><th>#</th><th>اسم المشترك</th><th>رقم العداد</th><th>اسم العلبة</th><th>قيمة العداد الجديدة</th><th>قيمة العداد القديمة</th><th>المصروف</th><th>رسم الاشتراك</th><th>القيمة الشهرية</th><th>VAT 11%</th><th>المجموع</th><th><label>تحديد الكل <input type="checkbox" data-select-all /></label></th></tr></thead><tbody></tbody></table></div><footer class="document-status message"></footer>`;
     $('#workspace').append(win);
     win.style.zIndex = String(++topWindowLayer);
     const body = win.querySelector('tbody');
     const status = win.querySelector('footer');
     const message = (text, type = '') => { status.textContent = text; status.className = `document-status message ${type}`; };
-    const shown = () => data.rows.filter(row => (!regionFilter || row.regionName === regionFilter) && (!boxFilter || row.boxName === boxFilter) && (state === 'all' || (state === 'paid') === row.paid)).sort((a, b) => sort === 'subscriber' ? a.subscriberName.localeCompare(b.subscriberName, 'ar') : a.regionName.localeCompare(b.regionName, 'ar') || a.boxName.localeCompare(b.boxName, 'ar') || a.subscriberName.localeCompare(b.subscriberName, 'ar'));
-    const render = () => { body.replaceChildren(); const fragment = document.createDocumentFragment(); shown().forEach((row, index) => { const usage = Math.max(0, row.counterValue - row.previousCounterValue); const total = usd ? usage * row.kiloPriceUsd + row.subscriptionFeeUsd : usage * row.kiloPriceLbp + row.subscriptionFeeLbp; const tr = document.createElement('tr'); tr.dataset.id = String(row.id); tr.innerHTML = `<td>${index + 1}</td><td>${escapeHtml(row.subscriberName)}</td><td>${escapeHtml(row.counterNumber)}</td><td>${escapeHtml(row.boxName)}</td><td>${row.counterValue}</td><td>${row.previousCounterValue}</td><td>${usage}</td><td>${usd ? '$' + row.subscriptionFeeUsd.toFixed(2) : row.subscriptionFeeLbp}</td><td>${usd ? '$' + row.kiloPriceUsd.toFixed(2) : row.kiloPriceLbp}</td><td>${usd ? '$' + total.toFixed(2) : Math.round(total)}</td><td><input type="checkbox" data-paid ${row.paid ? 'checked' : ''} disabled /></td><td><input type="checkbox" data-select ${selected.has(row.id) ? 'checked' : ''} /></td>`; tr.querySelector('[data-select]').addEventListener('change', event => { if (event.target.checked)
-        selected.add(row.id);
-    else
-        selected.delete(row.id); }); fragment.append(tr); }); body.append(fragment); };
+    const shown = () => data.rows.filter(row => (!regionFilter || row.regionName === regionFilter) && (!boxFilter || row.boxName === boxFilter) && (state === 'all' || (state === 'paid') === row.paid)).sort((a, b) => sort === 'subscriber' ? arabicCollator.compare(a.subscriberName, b.subscriberName) : arabicCollator.compare(a.regionName, b.regionName) || arabicCollator.compare(a.boxName, b.boxName) || arabicCollator.compare(a.subscriberName, b.subscriberName));
+    const render = () => {
+        body.replaceChildren();
+        const fragment = document.createDocumentFragment();
+        const money = amount => usd ? '$' + amount.toFixed(2) : String(amount);
+        shown().forEach((row, index) => {
+            const { usage, monthlyValue, vat, total } = meterReportAmounts(row, usd);
+            const tr = document.createElement('tr');
+            tr.dataset.id = String(row.id);
+            tr.innerHTML = `<td>${index + 1}</td><td>${escapeHtml(row.subscriberName)}</td><td>${escapeHtml(row.counterNumber)}</td><td>${escapeHtml(row.boxName)}</td><td>${row.counterValue}</td><td>${row.previousCounterValue}</td><td>${usage}</td><td>${usd ? '$' + row.subscriptionFeeUsd.toFixed(2) : row.subscriptionFeeLbp}</td><td>${money(monthlyValue)}</td><td>${money(vat)}</td><td>${money(total)}</td><td><input type="checkbox" data-select ${selected.has(row.id) ? 'checked' : ''} /></td>`;
+            tr.querySelector('[data-select]').addEventListener('change', event => {
+                if (event.target.checked)
+                    selected.add(row.id);
+                else
+                    selected.delete(row.id);
+            });
+            fragment.append(tr);
+        });
+        body.append(fragment);
+    };
     const revealSearchRow = (row) => {
+        const filtersChanged = Boolean(regionFilter || boxFilter || state !== 'all');
         regionFilter = '';
         boxFilter = '';
         state = 'all';
         win.querySelector('[name="region-filter"]').value = '';
         win.querySelector('[name="box-filter"]').value = '';
         win.querySelector('[name="state"]').value = 'all';
-        render();
+        if (filtersChanged)
+            render();
         pinSearchResult(body, body.querySelector(`tr[data-id="${row.id}"]`));
     };
     render();
@@ -1071,14 +1225,20 @@ async function openMeterReport(periodId, replace = false) {
     win.querySelectorAll('[data-report-cmd="close"]').forEach(b => b.addEventListener('click', close));
     win.querySelector('[data-report-cmd="min"]').addEventListener('click', () => win.classList.toggle('minimized'));
     win.querySelector('[data-report-cmd="max"]').addEventListener('click', () => win.classList.toggle('maximized'));
-    win.querySelector('[data-select-all]').addEventListener('change', event => { const checked = event.target.checked; shown().forEach(row => checked ? selected.add(row.id) : selected.delete(row.id)); render(); });
+    win.querySelector('[data-select-all]').addEventListener('change', event => { const checked = event.target.checked; shown().forEach(row => checked ? selected.add(row.id) : selected.delete(row.id)); body.querySelectorAll('[data-select]').forEach(input => { input.checked = checked; }); });
     win.querySelector('[name="usd"]').addEventListener('change', event => { usd = event.target.checked; render(); });
     win.querySelector('[name="region-filter"]').addEventListener('change', event => { regionFilter = event.target.value; boxFilter = ''; win.querySelector('[name="box-filter"]').value = ''; selected.clear(); win.querySelector('[data-select-all]').checked = false; render(); });
     win.querySelector('[name="box-filter"]').addEventListener('change', event => { boxFilter = event.target.value; selected.clear(); win.querySelector('[data-select-all]').checked = false; render(); });
     win.querySelector('[name="sort"]').addEventListener('change', event => { sort = event.target.value; render(); });
     win.querySelector('[name="state"]').addEventListener('change', event => { state = event.target.value; render(); });
+    const searchable = item => ({ ...item, searchText: String(item.label ?? '').toLocaleLowerCase('ar') });
+    const searchItems = {
+        reference: prioritizedMeterPeriods(data.periods).map(period => searchable({ label: period.reference, run: () => void openMeterReport(period.id, true) })),
+        name: data.rows.map(row => searchable({ label: row.subscriberName, run: () => revealSearchRow(row) })),
+        counter: data.rows.map(row => searchable({ label: row.counterNumber, run: () => revealSearchRow(row) })),
+    };
     const search = async (kind) => { const entered = await searchDialog(kind === 'reference' ? 'أدخل المرجع أو جزءاً منه' : kind === 'name' ? 'أدخل اسم المشترك أو جزءاً منه' : 'أدخل رقم العداد أو جزءاً منه', true); if (typeof entered !== 'string' || !entered.trim())
-        return; const q = entered.toLocaleLowerCase('ar'); const items = kind === 'reference' ? prioritizedMeterPeriods(data.periods).map(p => ({ label: p.reference, run: () => void openMeterReport(p.id, true) })) : data.rows.map(row => ({ label: kind === 'name' ? row.subscriberName : row.counterNumber, run: () => revealSearchRow(row) })); const matches = items.filter(item => item.label.toLocaleLowerCase('ar').includes(q)); if (!matches.length) {
+        return; const q = entered.toLocaleLowerCase('ar'); const matches = searchItems[kind].filter(item => item.searchText.includes(q)); if (!matches.length) {
         showNoSearchResults();
         return;
     } for (const item of matches)
@@ -1138,9 +1298,9 @@ async function openBreakerReport(periodId, replace = false) {
     win.querySelector('[data-br="min"]').addEventListener('click', () => win.classList.toggle('minimized'));
     win.querySelector('[data-br="max"]').addEventListener('click', () => win.classList.toggle('maximized'));
     win.querySelector('[data-br="refresh"]').addEventListener('click', () => void openBreakerReport(data.header?.id, true));
-    win.querySelector('[data-br-select-all]').addEventListener('change', event => { const checked = event.target.checked; data.details.forEach(row => checked ? selected.add(row.id) : selected.delete(row.id)); render(); });
+    win.querySelector('[data-br-select-all]').addEventListener('change', event => { const checked = event.target.checked; data.details.forEach(row => checked ? selected.add(row.id) : selected.delete(row.id)); body.querySelectorAll('[data-br-select]').forEach(input => { input.checked = checked; }); });
     const search = async (kind) => { const entered = await searchDialog(kind === 'reference' ? 'أدخل المرجع أو جزءاً منه' : 'أدخل اسم المشترك أو جزءاً منه', true); if (typeof entered !== 'string' || !entered.trim())
-        return; const query = entered.toLocaleLowerCase('ar'); const items = kind === 'reference' ? data.periods.map(period => ({ label: period.reference, run: () => void openBreakerReport(period.id, true) })) : data.details.map(row => ({ label: row.subscriberName, run: () => pinSearchResult(body, body.querySelector(`tr[data-id="${row.id}"]`)) })); const matches = items.filter(item => item.label.toLocaleLowerCase('ar').includes(query)); if (!matches.length) {
+        return; const query = entered.toLocaleLowerCase('ar'); const items = kind === 'reference' ? data.periods.map(period => ({ label: period.reference, run: () => void openBreakerReport(period.id, true) })) : data.details.map(row => ({ label: row.subscriberName, run: () => pinSearchResult(body, body.querySelector(`tr[data-id="${row.id}"]`)) })); const matches = findSearchMatches(items, query); if (!matches.length) {
         showNoSearchResults();
         return;
     } for (const item of matches)
@@ -1181,7 +1341,7 @@ async function openInstitutionDebts(selectedReference, replace = false) {
     filterWrap.className = 'debt-item-filter';
     filterWrap.innerHTML = '<span>الصنف:</span><select><option value="">جميع الأصناف</option></select>';
     const itemFilter = filterWrap.querySelector('select');
-    [...new Set(rows.map(row => row.itemName))].sort((a, b) => a.localeCompare(b, 'ar')).forEach(item => { const option = document.createElement('option'); option.value = item; option.textContent = item; itemFilter.append(option); });
+    [...new Set(rows.map(row => row.itemName))].sort((a, b) => arabicCollator.compare(a, b)).forEach(item => { const option = document.createElement('option'); option.value = item; option.textContent = item; itemFilter.append(option); });
     win.querySelector('.debt-reference').append(filterWrap);
     const applyItemFilter = () => { const filtered = itemFilter.value ? rows.filter(row => row.itemName === itemFilter.value) : rows; body.replaceChildren(); filtered.forEach((row, index) => { const tr = document.createElement('tr'); tr.dataset.id = String(row.id); tr.innerHTML = `<td class="row-number">${index + 1}</td><td>${escapeHtml(row.date?.slice(0, 10))}</td><td>${escapeHtml(row.itemName)}</td><td>${usd(row.requiredAmount)}</td><td>${usd(row.paidAmount)}</td><td>${usd(row.remainingAmount)}</td>`; body.append(tr); }); const totals = [filtered.reduce((sum, row) => sum + Number(row.requiredAmount), 0), filtered.reduce((sum, row) => sum + Number(row.paidAmount), 0), filtered.reduce((sum, row) => sum + Number(row.remainingAmount), 0)]; win.querySelectorAll('.debt-summary strong').forEach((element, index) => element.textContent = usd(totals[index])); };
     itemFilter.addEventListener('change', applyItemFilter);
@@ -1191,7 +1351,7 @@ async function openInstitutionDebts(selectedReference, replace = false) {
     win.querySelector('[data-debt="max"]').addEventListener('click', () => win.classList.toggle('maximized'));
     win.querySelector('[data-debt="refresh"]').addEventListener('click', () => void openInstitutionDebts(selectedReference, true));
     win.querySelector('[data-debt="search"]').addEventListener('click', () => void (async () => { const entered = await searchDialog('أدخل المرجع أو جزءاً منه', true); if (typeof entered !== 'string' || !entered.trim())
-        return; const query = entered.toLocaleLowerCase('ar'); const references = [...new Set(allRows.map(row => row.reference))].filter(reference => reference.toLocaleLowerCase('ar').includes(query)); if (!references.length) {
+        return; const query = entered.toLocaleLowerCase('ar'); const references = findSearchMatches([...new Set(allRows.map(row => row.reference))], query, reference => reference); if (!references.length) {
         showNoSearchResults();
         return;
     } for (const reference of references)
